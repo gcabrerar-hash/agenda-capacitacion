@@ -60,8 +60,36 @@ async function obtenerToken() {
   return datos.access_token;
 }
 
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({
+      error: "Método no permitido.",
+    });
+  }
+
+  // Verificar la contraseña antes de acceder a Google Calendar.
+  const esperada = process.env.AGENDA_ACCESS_PASSWORD;
+  const recibida = req.headers["x-agenda-password"];
+
+  if (
+    !esperada ||
+    typeof recibida !== "string" ||
+    Buffer.byteLength(recibida) !== Buffer.byteLength(esperada) ||
+    !crypto.timingSafeEqual(
+      Buffer.from(recibida),
+      Buffer.from(esperada)
+    )
+  ) {
+    return res.status(401).json({
+      error: "Acceso no autorizado. Verifica tu contraseña.",
+    });
+  }
+
+  // Debajo de este punto conserva el resto del código existente:
+  // lectura de req.body, validaciones y creación del evento.
+
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Método no permitido." });
   }
