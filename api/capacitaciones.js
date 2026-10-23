@@ -1,4 +1,4 @@
-
+```javascript
 import crypto from "node:crypto";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -12,15 +12,21 @@ function base64url(value) {
 function crearJWT() {
   const email = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
 
-  if (!email || !privateKey || !process.env.GOOGLE_CALENDAR_ID) {
-    throw new Error("Faltan variables de entorno.");
+  if (!email || !privateKey || !calendarId) {
+    throw new Error("Faltan variables de entorno de Google.");
   }
 
   const ahora = Math.floor(Date.now() / 1000);
+
   const cabecera = base64url(
-    JSON.stringify({ alg: "RS256", typ: "JWT" })
+    JSON.stringify({
+      alg: "RS256",
+      typ: "JWT",
+    })
   );
+
   const carga = base64url(
     JSON.stringify({
       iss: email,
@@ -32,6 +38,7 @@ function crearJWT() {
   );
 
   const mensaje = `${cabecera}.${carga}`;
+
   const firma = crypto
     .sign("RSA-SHA256", Buffer.from(mensaje), privateKey)
     .toString("base64url");
@@ -53,17 +60,23 @@ async function obtenerToken() {
 
   const datos = await respuesta.json();
 
-  if (!respuesta.ok) {
+  if (!respuesta.ok || !datos.access_token) {
+    console.error(
+      "Error de autenticación con Google:",
+      respuesta.status,
+      datos.error || "Sin token de acceso"
+    );
+
     throw new Error("Falló la autenticación con Google.");
   }
 
   return datos.access_token;
 }
 
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
+
     return res.status(405).json({
       error: "Método no permitido.",
     });
@@ -87,13 +100,6 @@ export default async function handler(req, res) {
     });
   }
 
-  // Debajo de este punto conserva el resto del código existente:
-  // lectura de req.body, validaciones y creación del evento.
-
-    res.setHeader("Allow", "POST");
-    return res.status(405).json({ error: "Método no permitido." });
-  }
-
   const {
     titulo,
     ponente,
@@ -104,12 +110,16 @@ export default async function handler(req, res) {
     descripcion,
   } = req.body || {};
 
+  // Validar los campos obligatorios y el formato de fecha y hora.
   if (
     typeof titulo !== "string" ||
     !titulo.trim() ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(fecha || "") ||
-    !/^\d{2}:\d{2}$/.test(horaInicio || "") ||
-    !/^\d{2}:\d{2}$/.test(horaFin || "") ||
+    typeof fecha !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(fecha) ||
+    typeof horaInicio !== "string" ||
+    !/^\d{2}:\d{2}$/.test(horaInicio) ||
+    typeof horaFin !== "string" ||
+    !/^\d{2}:\d{2}$/.test(horaFin) ||
     horaFin <= horaInicio
   ) {
     return res.status(400).json({
@@ -117,8 +127,35 @@ export default async function handler(req, res) {
     });
   }
 
+  // Comprobar que la fecha y las horas sean reales.
+  const fechaComprobada = new Date(`${fecha}T12:00:00Z`);
+
+  if (
+    Number.isNaN(fechaComprobada.getTime()) ||
+    fechaComprobada.toISOString().slice(0, 10) !== fecha
+  ) {
+    return res.status(400).json({
+      error: "La fecha indicada no es válida.",
+    });
+  }
+
+  const [horaIni, minutoIni] = horaInicio.split(":").map(Number);
+  const [horaFinNum, minutoFin] = horaFin.split(":").map(Number);
+
+  if (
+    horaIni > 23 ||
+    minutoIni > 59 ||
+    horaFinNum > 23 ||
+    minutoFin > 59
+  ) {
+    return res.status(400).json({
+      error: "La hora de inicio o de fin no es válida.",
+    });
+  }
+
   try {
     const token = await obtenerToken();
+
     const calendario = encodeURIComponent(
       process.env.GOOGLE_CALENDAR_ID
     );
@@ -126,12 +163,14 @@ export default async function handler(req, res) {
     const evento = {
       summary: titulo.trim(),
       description: [
-        typeof descripcion === "string" ? descripcion : "",
-        typeof ponente === "string" && ponente
-          ? `Ponente: ${ponente}`
+        typeof descripcion === "string" ? descripcion.trim() : "",
+        typeof ponente === "string" && ponente.trim()
+          ? `Ponente: ${ponente.trim()}`
           : "",
-      ].filter(Boolean).join("\n"),
-      location: typeof lugar === "string" ? lugar : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      location: typeof lugar === "string" ? lugar.trim() : "",
       start: {
         dateTime: `${fecha}T${horaInicio}:00`,
         timeZone: "America/Mexico_City",
@@ -155,7 +194,14 @@ export default async function handler(req, res) {
     );
 
     if (!respuesta.ok) {
-      console.error("Google Calendar respondió:", respuesta.status);
+      const detalle = await respuesta.text();
+
+      console.error(
+        "Error de Google Calendar:",
+        respuesta.status,
+        detalle
+      );
+
       return res.status(502).json({
         error: "Google Calendar no pudo crear el evento.",
       });
@@ -169,9 +215,14 @@ export default async function handler(req, res) {
       enlace: creado.htmlLink,
     });
   } catch (error) {
-    console.error("Error al registrar capacitación:", error.message);
+    console.error(
+      "Error al registrar capacitación:",
+      error.message
+    );
+
     return res.status(500).json({
       error: "No se pudo registrar la capacitación.",
     });
   }
 }
+```
